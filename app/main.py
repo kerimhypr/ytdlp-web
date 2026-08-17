@@ -25,7 +25,8 @@ STATIC = ROOT / "frontend"
 TEMP_ROOT = Path(os.getenv("YTDLP_TEMP_DIR", "/tmp/ytdlp-web"))
 TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 JOBS: dict[str, dict[str, Any]] = {}
-ALLOWED_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com", "instagram.com", "tiktok.com", "twitter.com", "x.com")
+ALLOWED_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com", "instagram.com", "instagr.am", "tiktok.com", "twitter.com", "x.com", "t.co")
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
 
 app = FastAPI(title="ytdlp-web", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -91,11 +92,41 @@ def progress_from_output(line: str) -> int | None:
     return min(99, int(float(match.group(1)))) if match else None
 
 
+def extractor_args(url: str) -> list[str]:
+    host = (urlparse(url).hostname or "").lower()
+    args = ["--user-agent", USER_AGENT, "--socket-timeout", "30", "--retries", "2", "--extractor-retries", "2"]
+    if host.endswith(("twitter.com", "x.com")):
+        args += ["--extractor-args", "twitter:api=syndication"]
+    return args
+
+
+def explain_extraction_error(output: str) -> str:
+    text = re.sub(r"\x1b\[[0-9;]*m", "", output or "")
+    lower = text.lower()
+    if "unsupported url" in lower or "no suitable extractor" in lower:
+        return "Bu URL biçimi desteklenmiyor. Gönderinin/video sayfasının tam bağlantısını deneyin."
+    if "private" in lower or "login required" in lower or "sign in to confirm" in lower:
+        return "Bu içerik herkese açık değil veya platform giriş istiyor. Yalnızca herkese açık içerikler desteklenir."
+    if "captcha" in lower or "robot" in lower or "bot" in lower or "confirm you're not a bot" in lower:
+        return "Kaynak platform geçici bot doğrulaması istiyor. Birkaç dakika sonra tekrar deneyin."
+    if "http error 403" in lower or "forbidden" in lower or "blocked" in lower:
+        return "Kaynak platform bu sunucunun isteğini geçici olarak reddetti. Daha sonra tekrar deneyin."
+    if "country" in lower or "geo" in lower or "not available" in lower:
+        return "Bu içerik sunucunun bulunduğu bölgede kullanılamıyor."
+    meaningful = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("[debug]")]
+    if meaningful:
+        detail = meaningful[-1].replace("ERROR:", "").strip()
+        if len(detail) > 180:
+            detail = detail[:177] + "..."
+        return f"Platform yanıtı: {detail}"
+    return "Link çözümlenemedi. URL'nin herkese açık ve doğrudan medya sayfası olduğundan emin olun."
+
+
 async def download_job(job_id: str, request: DownloadRequest) -> None:
     job = JOBS[job_id]
     folder = Path(job["folder"])
     try:
-        args = ["--no-playlist", "--newline", "--no-warnings", "--restrict-filenames"]
+        args = ["--no-playlist", "--newline", "--no-warnings", "--restrict-filenames", *extractor_args(request.url)]
         start, end = seconds(request.start), seconds(request.end)
         if start is not None and end is not None and end > start:
             args += ["--download-sections", f"*{request.start}-{request.end}", "--force-keyframes-at-cuts"]
@@ -149,9 +180,9 @@ async def health() -> dict[str, str]:
 @app.post("/api/inspect")
 async def inspect(request: InspectRequest) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as folder:
-        result = await asyncio.to_thread(run_ytdlp, ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", request.url], Path(folder))
+        result = await asyncio.to_thread(run_ytdlp, ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", *extractor_args(request.url), request.url], Path(folder))
     if result.returncode != 0:
-        raise HTTPException(422, "Link çözümlenemedi. URL herkese açık olmalı.")
+        raise HTTPException(422, explain_extraction_error(result.stderr or result.stdout))
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
