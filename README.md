@@ -23,4 +23,4 @@ Desteklenen formatlar ses için `best`, `mp3`, `opus`, `flac`, `wav`; video içi
 
 ## YouTube fallback
 
-YouTube istekleri önce yt-dlp'nin default extractor akışıyla denenir. Bot/403/CAPTCHA hatası alınırsa aynı istek sırasıyla `tv`, `web_embedded`, `web_safari` ve `android_vr` client'larıyla birer kez yeniden denenir. Tüm denemeler başarısız olursa kaynak platformun anlaşılır hata mesajı döndürülür.
+YouTube istekleri önce yt-dlp'nin default extractor akışıyla denenir. Bot/403/CAPTCHA hatası alınırsa aynı istek sırasıyla `tv`, `web_embedded`, `web_safari` ve `android_vr` client'larıyla birer kez yeniden denenir. Tüm denemeler başarısız olursa kaynak platformun anlaşılır hata mesajı döndürülür
