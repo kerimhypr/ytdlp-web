@@ -21,12 +21,6 @@ Ardından `http://localhost:8000` adresini açın. Render, `render.yaml` ve `Doc
 
 Desteklenen formatlar ses için `best`, `mp3`, `opus`, `flac`, `wav`; video için `best`, `mp4-1080`, `mp4-720`, `mp4-480`; altyazı için `srt`, `vtt` şeklindedir.
 
-## YouTube proxy fallback
+## YouTube fallback
 
-İstekler önce doğrudan yapılır. YouTube bot/403 doğrulaması döndürürse ve `YOUTUBE_PROXY` tanımlıysa yalnızca o YouTube isteği proxy üzerinden bir kez daha denenir:
-
-```text
-YOUTUBE_PROXY=http://user:password@host:port
-```
-
-Proxy değeri Render Environment Variables bölümüne eklenmelidir. Değer boşsa proxy fallback devre dışıdır. Cookie kullanılmaz.
+YouTube istekleri önce yt-dlp'nin default extractor akışıyla denenir. Bot/403/CAPTCHA hatası alınırsa aynı istek sırasıyla `tv`, `web_embedded`, `web_safari` ve `android_vr` client'larıyla birer kez yeniden denenir. Tüm denemeler başarısız olursa kaynak platformun anlaşılır hata mesajı döndürülür.

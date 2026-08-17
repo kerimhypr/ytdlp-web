@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -12,8 +13,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +28,8 @@ TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 JOBS: dict[str, dict[str, Any]] = {}
 ALLOWED_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com", "instagram.com", "instagr.am", "tiktok.com", "twitter.com", "x.com", "t.co")
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
+YOUTUBE_FALLBACK_CLIENTS = ("tv", "web_embedded", "web_safari", "android_vr")
+logger = logging.getLogger("ytdlp-web")
 
 app = FastAPI(title="ytdlp-web", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -105,52 +107,27 @@ def canonical_url(value: str) -> str:
     return value
 
 
-def youtube_oembed(value: str) -> dict[str, Any] | None:
-    target = canonical_url(value)
-    host = (urlparse(target).hostname or "").lower().removeprefix("www.")
-    if host not in {"youtube.com", "youtube-nocookie.com"}:
-        return None
-    try:
-        query = urlencode({"url": target, "format": "json"})
-        request = Request(f"https://www.youtube.com/oembed?{query}", headers={"User-Agent": USER_AGENT})
-        with urlopen(request, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        video_id = parse_qs(urlparse(target).query).get("v", [None])[0]
-        return {"id": video_id, "title": data.get("title") or "YouTube video", "thumbnail": data.get("thumbnail_url"), "duration": None, "duration_string": None, "uploader": data.get("author_name"), "webpage_url": target, "subtitles": [], "automatic_captions": []}
-    except Exception:
-        return None
-
-
 def progress_from_output(line: str) -> int | None:
     match = re.search(r"(\d+(?:\.\d+)?)%", line)
     return min(99, int(float(match.group(1)))) if match else None
 
 
-def extractor_args(url: str) -> list[str]:
+def is_youtube(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host.endswith(("youtube.com", "youtube-nocookie.com", "youtu.be"))
+
+
+def extractor_args(url: str, client: str | None = None) -> list[str]:
     host = (urlparse(url).hostname or "").lower()
     args = ["--user-agent", USER_AGENT, "--socket-timeout", "30", "--retries", "2", "--extractor-retries", "2"]
-    if host.endswith(("youtube.com", "youtube-nocookie.com", "youtu.be")):
-        args += [
-            "--extractor-args", "youtube:player_client=mweb",
-            "--extractor-args", "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
-        ]
+    if client and is_youtube(url):
+        args += ["--extractor-args", f"youtube:player_client={client}"]
     if host.endswith(("twitter.com", "x.com")):
         args += ["--extractor-args", "twitter:api=syndication"]
     return args
 
 
-def youtube_proxy(url: str) -> str | None:
-    host = (urlparse(url).hostname or "").lower()
-    proxy = os.getenv("YOUTUBE_PROXY", "").strip()
-    parsed = urlparse(proxy)
-    if not host.endswith(("youtube.com", "youtube-nocookie.com", "youtu.be")):
-        return None
-    if parsed.scheme not in {"http", "https", "socks4", "socks5", "socks5h"} or not parsed.netloc:
-        return None
-    return proxy
-
-
-def should_retry_with_proxy(output: str) -> bool:
+def should_try_youtube_fallback(output: str) -> bool:
     lower = (output or "").lower()
     return any(marker in lower for marker in ("sign in to confirm", "http error 403", "forbidden", "captcha", "not a bot", "botguard", "blocked"))
 
@@ -160,10 +137,10 @@ def explain_extraction_error(output: str) -> str:
     lower = text.lower()
     if "unsupported url" in lower or "no suitable extractor" in lower:
         return "Bu URL biçimi desteklenmiyor. Gönderinin/video sayfasının tam bağlantısını deneyin."
+    if "captcha" in lower or "robot" in lower or "bot" in lower or "confirm you're not a bot" in lower:
+        return "YouTube kaynak sunucusu bot doğrulaması istiyor. Bu içerik için tüm ücretsiz client denemeleri başarısız oldu."
     if "private" in lower or "login required" in lower or "sign in to confirm" in lower:
         return "Bu içerik herkese açık değil veya platform giriş istiyor. Yalnızca herkese açık içerikler desteklenir."
-    if "captcha" in lower or "robot" in lower or "bot" in lower or "confirm you're not a bot" in lower:
-        return "Kaynak platform geçici bot doğrulaması istiyor. Birkaç dakika sonra tekrar deneyin."
     if "http error 403" in lower or "forbidden" in lower or "blocked" in lower:
         return "Kaynak platform bu sunucunun isteğini geçici olarak reddetti. Daha sonra tekrar deneyin."
     if "country" in lower or "geo" in lower or "not available" in lower:
@@ -196,23 +173,35 @@ async def download_job(job_id: str, request: DownloadRequest) -> None:
             args += ["-f", selector, "--merge-output-format", "mp4", "-o", "%(title)s.%(ext)s"]
         else:
             args += ["--write-subs", "--sub-langs", request.subtitle_langs, "--sub-format", request.format, "--skip-download", "-o", "%(title)s.%(ext)s"]
-        args.append(target_url)
-        job["status"] = "downloading"
         def update_progress(line: str) -> None:
             value = progress_from_output(line)
             if value is not None:
                 job["progress"] = value
                 job["updated_at"] = time.time()
 
-        returncode, output = await asyncio.to_thread(stream_ytdlp, args, folder, update_progress)
-        proxy = youtube_proxy(target_url)
-        if returncode != 0 and proxy and should_retry_with_proxy(output):
-            for path in folder.iterdir():
-                if path.is_file():
-                    path.unlink(missing_ok=True)
-            job["status"] = "retrying_proxy"
-            job["progress"] = 0
-            returncode, output = await asyncio.to_thread(stream_ytdlp, [*args[:-1], "--proxy", proxy, args[-1]], folder, update_progress)
+        async def run_download_attempt(client: str | None) -> tuple[int, str]:
+            attempt_args = list(args)
+            if client:
+                attempt_args += ["--extractor-args", f"youtube:player_client={client}"]
+            attempt_args.append(target_url)
+            logger.info("yt-dlp download attempt client=%s url=%s", client or "default", target_url)
+            return await asyncio.to_thread(stream_ytdlp, attempt_args, folder, update_progress)
+
+        job["status"] = "downloading"
+        returncode, output = await run_download_attempt(None)
+        if returncode != 0:
+            logger.warning("yt-dlp failed client=default error=%s", output[-800:].strip())
+        if returncode != 0 and is_youtube(target_url) and should_try_youtube_fallback(output):
+            for client in YOUTUBE_FALLBACK_CLIENTS:
+                for path in folder.iterdir():
+                    if path.is_file():
+                        path.unlink(missing_ok=True)
+                job["status"] = f"retrying_{client}"
+                job["progress"] = 0
+                returncode, output = await run_download_attempt(client)
+                if returncode == 0:
+                    break
+                logger.warning("yt-dlp failed client=%s error=%s", client, output[-800:].strip())
         if returncode != 0:
             raise RuntimeError(explain_extraction_error(output))
         files = [p for p in folder.iterdir() if p.is_file()]
@@ -245,16 +234,22 @@ async def health() -> dict[str, str]:
 async def inspect(request: InspectRequest) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as folder:
         target_url = canonical_url(request.url)
-        inspect_args = ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", *extractor_args(target_url), target_url]
-        result = await asyncio.to_thread(run_ytdlp, inspect_args, Path(folder))
+
+        def inspect_attempt(client: str | None) -> subprocess.CompletedProcess[str]:
+            args = ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", *extractor_args(target_url, client), target_url]
+            logger.info("yt-dlp inspect attempt client=%s url=%s", client or "default", target_url)
+            result = run_ytdlp(args, Path(folder))
+            if result.returncode != 0:
+                logger.warning("yt-dlp inspect failed client=%s error=%s", client or "default", (result.stderr or result.stdout)[-800:].strip())
+            return result
+
+        result = await asyncio.to_thread(inspect_attempt, None)
+        if result.returncode != 0 and is_youtube(target_url) and should_try_youtube_fallback(result.stderr or result.stdout):
+            for client in YOUTUBE_FALLBACK_CLIENTS:
+                result = await asyncio.to_thread(inspect_attempt, client)
+                if result.returncode == 0:
+                    break
     if result.returncode != 0:
-        proxy = youtube_proxy(target_url)
-        if proxy and should_retry_with_proxy(result.stderr or result.stdout):
-            result = await asyncio.to_thread(run_ytdlp, [*inspect_args[:-1], "--proxy", proxy, inspect_args[-1]], Path(folder))
-    if result.returncode != 0:
-        fallback = await asyncio.to_thread(youtube_oembed, request.url)
-        if fallback:
-            return fallback
         raise HTTPException(422, explain_extraction_error(result.stderr or result.stdout))
     try:
         data = json.loads(result.stdout)
