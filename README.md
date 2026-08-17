@@ -2,7 +2,7 @@
 
 Stateless, tek konteynerli medya çıkarıcı. FastAPI, yt-dlp ve ffmpeg kullanır; veritabanı yoktur.
 
-## Çalıştırma
+## Calıştırma
 
 ```bash
 docker build -t ytdlp-web .
