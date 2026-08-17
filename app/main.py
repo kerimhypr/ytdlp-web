@@ -129,6 +129,8 @@ def progress_from_output(line: str) -> int | None:
 def extractor_args(url: str) -> list[str]:
     host = (urlparse(url).hostname or "").lower()
     args = ["--user-agent", USER_AGENT, "--socket-timeout", "30", "--retries", "2", "--extractor-retries", "2"]
+    if host.endswith(("youtube.com", "youtube-nocookie.com", "youtu.be")):
+        args += ["--extractor-args", "youtube:player_client=tv,web_embedded,android_vr"]
     if host.endswith(("twitter.com", "x.com")):
         args += ["--extractor-args", "twitter:api=syndication"]
     return args
