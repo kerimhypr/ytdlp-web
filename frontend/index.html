@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="YouTube, Instagram, TikTok ve X için hızlı medya çıkarıcı." />
+    <title>ytdlp-web — media extractor</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/"><span class="brand-mark">[</span> ytdlp-web <span class="brand-mark">]</span></a>
+        <div class="topbar-right"><span class="system-dot"></span><span>LOCAL EXTRACTOR</span><span class="version">v1.0</span></div>
+      </header>
+      <section class="hero">
+        <p class="eyebrow"><span>01</span> INPUT SOURCE</p>
+        <h1>Linki bırak.<br /><em>Dosyayı al.</em></h1>
+        <p class="lede"><span class="prompt">$</span> Video ve sesleri kaynaktan incele, kes, dönüştür veya orijinal kalitesiyle indir.</p>
+        <form id="inspect-form" class="url-form">
+          <span class="input-prefix">URL://</span><input id="url" name="url" type="url" placeholder="youtube.com/watch?v=..." autocomplete="url" required />
+          <button type="submit">FETCH <span>↗</span></button>
+        </form>
+        <p id="error" class="error" role="alert"></p>
+      </section>
+
+      <section id="result" class="result hidden" aria-live="polite">
+        <div class="section-heading"><span><b>02</b> SOURCE FOUND</span><span class="heading-line"></span><span class="heading-state">READY</span></div>
+        <div class="media-card">
+          <div class="thumb-wrap"><img id="thumbnail" alt="" /><span id="duration" class="duration"></span></div>
+          <div class="media-copy"><div class="source" id="source">MEDIA</div><h2 id="title"></h2><p id="uploader"></p></div>
+        </div>
+        <div class="source-detail"><span>EXTRACTION TARGET</span><code id="target-url">—</code></div>
+        <div class="section-heading configure-heading"><span><b>03</b> EXTRACTION CONFIG</span><span class="heading-line"></span></div>
+        <div class="controls">
+          <div class="control-row trim-row">
+            <label>Başlangıç<input id="start" inputmode="numeric" placeholder="00:00" /></label>
+            <span class="dash">—</span>
+            <label>Bitiş<input id="end" inputmode="numeric" placeholder="Son" /></label>
+            <span class="field-hint">OPTIONAL<br />TRIM RANGE</span>
+          </div>
+          <div class="control-row formats">
+            <label><span class="label-index">A</span> Tür<select id="kind"><option value="audio">Ses</option><option value="video">Video</option><option value="subtitle">Altyazı</option></select></label>
+            <label><span class="label-index">B</span> Format<select id="format"></select></label>
+          </div>
+          <button id="download" class="download" type="button"><span>RUN EXTRACTION</span><span>↓</span></button>
+          <div id="progress-area" class="progress-area hidden"><div class="progress-meta"><span id="progress-label">Hazırlanıyor...</span><span id="progress-value">0%</span></div><div class="progress"><i id="progress-bar"></i></div></div>
+        </div>
+      </section>
+      <footer><span>yt-dlp + ffmpeg <i class="footer-separator">/</i> NO DATABASE</span><span>EPHEMERAL FILE SYSTEM <i class="system-dot small"></i></span></footer>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

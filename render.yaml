@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: ytdlp-web
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
