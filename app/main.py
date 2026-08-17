@@ -190,7 +190,7 @@ async def download_job(job_id: str, request: DownloadRequest) -> None:
 
         returncode, output = await asyncio.to_thread(stream_ytdlp, args, folder, update_progress)
         if returncode != 0:
-            raise RuntimeError(output[-500:] or "yt-dlp işlemi başarısız")
+            raise RuntimeError(explain_extraction_error(output))
         files = [p for p in folder.iterdir() if p.is_file()]
         if not files:
             raise RuntimeError("İndirilebilir medya veya altyazı bulunamadı")
