@@ -12,7 +12,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import Request, urlopen
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -87,6 +88,39 @@ def seconds(value: str | None) -> float | None:
     return parts[0] * 3600 + parts[1] * 60 + parts[2]
 
 
+def canonical_url(value: str) -> str:
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    video_id = ""
+    if host == "youtu.be":
+        video_id = parsed.path.strip("/").split("/")[0]
+    elif host in {"youtube.com", "youtube-nocookie.com"}:
+        parts = [part for part in parsed.path.split("/") if part]
+        if parts and parts[0] in {"shorts", "embed", "live"} and len(parts) > 1:
+            video_id = parts[1]
+        else:
+            video_id = parse_qs(parsed.query).get("v", [""])[0]
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return value
+
+
+def youtube_oembed(value: str) -> dict[str, Any] | None:
+    target = canonical_url(value)
+    host = (urlparse(target).hostname or "").lower().removeprefix("www.")
+    if host not in {"youtube.com", "youtube-nocookie.com"}:
+        return None
+    try:
+        query = urlencode({"url": target, "format": "json"})
+        request = Request(f"https://www.youtube.com/oembed?{query}", headers={"User-Agent": USER_AGENT})
+        with urlopen(request, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        video_id = parse_qs(urlparse(target).query).get("v", [None])[0]
+        return {"id": video_id, "title": data.get("title") or "YouTube video", "thumbnail": data.get("thumbnail_url"), "duration": None, "duration_string": None, "uploader": data.get("author_name"), "webpage_url": target, "subtitles": [], "automatic_captions": []}
+    except Exception:
+        return None
+
+
 def progress_from_output(line: str) -> int | None:
     match = re.search(r"(\d+(?:\.\d+)?)%", line)
     return min(99, int(float(match.group(1)))) if match else None
@@ -126,7 +160,8 @@ async def download_job(job_id: str, request: DownloadRequest) -> None:
     job = JOBS[job_id]
     folder = Path(job["folder"])
     try:
-        args = ["--no-playlist", "--newline", "--no-warnings", "--restrict-filenames", *extractor_args(request.url)]
+        target_url = canonical_url(request.url)
+        args = ["--no-playlist", "--newline", "--no-warnings", "--restrict-filenames", *extractor_args(target_url)]
         start, end = seconds(request.start), seconds(request.end)
         if start is not None and end is not None and end > start:
             args += ["--download-sections", f"*{request.start}-{request.end}", "--force-keyframes-at-cuts"]
@@ -140,7 +175,7 @@ async def download_job(job_id: str, request: DownloadRequest) -> None:
             args += ["-f", selector, "--merge-output-format", "mp4", "-o", "%(title)s.%(ext)s"]
         else:
             args += ["--write-subs", "--sub-langs", request.subtitle_langs, "--sub-format", request.format, "--skip-download", "-o", "%(title)s.%(ext)s"]
-        args.append(request.url)
+        args.append(target_url)
         job["status"] = "downloading"
         def update_progress(line: str) -> None:
             value = progress_from_output(line)
@@ -180,8 +215,12 @@ async def health() -> dict[str, str]:
 @app.post("/api/inspect")
 async def inspect(request: InspectRequest) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as folder:
-        result = await asyncio.to_thread(run_ytdlp, ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", *extractor_args(request.url), request.url], Path(folder))
+        target_url = canonical_url(request.url)
+        result = await asyncio.to_thread(run_ytdlp, ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", *extractor_args(target_url), target_url], Path(folder))
     if result.returncode != 0:
+        fallback = await asyncio.to_thread(youtube_oembed, request.url)
+        if fallback:
+            return fallback
         raise HTTPException(422, explain_extraction_error(result.stderr or result.stdout))
     try:
         data = json.loads(result.stdout)
