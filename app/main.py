@@ -139,6 +139,22 @@ def extractor_args(url: str) -> list[str]:
     return args
 
 
+def youtube_proxy(url: str) -> str | None:
+    host = (urlparse(url).hostname or "").lower()
+    proxy = os.getenv("YOUTUBE_PROXY", "").strip()
+    parsed = urlparse(proxy)
+    if not host.endswith(("youtube.com", "youtube-nocookie.com", "youtu.be")):
+        return None
+    if parsed.scheme not in {"http", "https", "socks4", "socks5", "socks5h"} or not parsed.netloc:
+        return None
+    return proxy
+
+
+def should_retry_with_proxy(output: str) -> bool:
+    lower = (output or "").lower()
+    return any(marker in lower for marker in ("sign in to confirm", "http error 403", "forbidden", "captcha", "not a bot", "botguard", "blocked"))
+
+
 def explain_extraction_error(output: str) -> str:
     text = re.sub(r"\x1b\[[0-9;]*m", "", output or "")
     lower = text.lower()
@@ -189,6 +205,14 @@ async def download_job(job_id: str, request: DownloadRequest) -> None:
                 job["updated_at"] = time.time()
 
         returncode, output = await asyncio.to_thread(stream_ytdlp, args, folder, update_progress)
+        proxy = youtube_proxy(target_url)
+        if returncode != 0 and proxy and should_retry_with_proxy(output):
+            for path in folder.iterdir():
+                if path.is_file():
+                    path.unlink(missing_ok=True)
+            job["status"] = "retrying_proxy"
+            job["progress"] = 0
+            returncode, output = await asyncio.to_thread(stream_ytdlp, [*args[:-1], "--proxy", proxy, args[-1]], folder, update_progress)
         if returncode != 0:
             raise RuntimeError(explain_extraction_error(output))
         files = [p for p in folder.iterdir() if p.is_file()]
@@ -221,7 +245,12 @@ async def health() -> dict[str, str]:
 async def inspect(request: InspectRequest) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as folder:
         target_url = canonical_url(request.url)
-        result = await asyncio.to_thread(run_ytdlp, ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", *extractor_args(target_url), target_url], Path(folder))
+        inspect_args = ["--dump-single-json", "--no-download", "--no-playlist", "--no-warnings", *extractor_args(target_url), target_url]
+        result = await asyncio.to_thread(run_ytdlp, inspect_args, Path(folder))
+    if result.returncode != 0:
+        proxy = youtube_proxy(target_url)
+        if proxy and should_retry_with_proxy(result.stderr or result.stdout):
+            result = await asyncio.to_thread(run_ytdlp, [*inspect_args[:-1], "--proxy", proxy, inspect_args[-1]], Path(folder))
     if result.returncode != 0:
         fallback = await asyncio.to_thread(youtube_oembed, request.url)
         if fallback:

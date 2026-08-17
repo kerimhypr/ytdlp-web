@@ -20,3 +20,13 @@ Ardından `http://localhost:8000` adresini açın. Render, `render.yaml` ve `Doc
 - `GET /api/download/{job_id}/file` — tamamlanan geçici dosyayı indirir ve temizler
 
 Desteklenen formatlar ses için `best`, `mp3`, `opus`, `flac`, `wav`; video için `best`, `mp4-1080`, `mp4-720`, `mp4-480`; altyazı için `srt`, `vtt` şeklindedir.
+
+## YouTube proxy fallback
+
+İstekler önce doğrudan yapılır. YouTube bot/403 doğrulaması döndürürse ve `YOUTUBE_PROXY` tanımlıysa yalnızca o YouTube isteği proxy üzerinden bir kez daha denenir:
+
+```text
+YOUTUBE_PROXY=http://user:password@host:port
+```
+
+Proxy değeri Render Environment Variables bölümüne eklenmelidir. Değer boşsa proxy fallback devre dışıdır. Cookie kullanılmaz.
