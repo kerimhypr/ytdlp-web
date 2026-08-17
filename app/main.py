@@ -19,7 +19,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "frontend"
@@ -54,6 +54,17 @@ class DownloadRequest(InspectRequest):
     start: str | None = Field(default=None, max_length=12)
     end: str | None = Field(default=None, max_length=12)
     subtitle_langs: str = Field(default="tr,en", max_length=30)
+
+    @model_validator(mode="after")
+    def validate_format_for_kind(self) -> "DownloadRequest":
+        allowed = {
+            "audio": {"best", "mp3", "opus", "flac", "wav"},
+            "video": {"best", "mp4-1080", "mp4-720", "mp4-480"},
+            "subtitle": {"srt", "vtt"},
+        }
+        if self.format not in allowed[self.kind]:
+            raise ValueError(f"{self.format} formatı {self.kind} türüyle kullanılamaz")
+        return self
 
     @field_validator("start", "end")
     @classmethod
@@ -165,7 +176,9 @@ async def download_job(job_id: str, request: DownloadRequest) -> None:
             args += ["--download-sections", f"*{request.start}-{request.end}", "--force-keyframes-at-cuts"]
         if request.kind == "audio":
             if request.format == "best":
-                args += ["-f", "bestaudio/best", "-o", "%(title)s.%(ext)s"]
+                # `/best` fallback'i video içeren MP4 akışına düşebilir.
+                # Ses seçiliyken yalnızca audio-only akış kabul edilir.
+                args += ["-f", "bestaudio", "-o", "%(title)s.%(ext)s"]
             else:
                 args += ["-x", "--audio-format", request.format, "--audio-quality", "0", "-o", "%(title)s.%(ext)s"]
         elif request.kind == "video":
