@@ -131,8 +131,8 @@ def extractor_args(url: str) -> list[str]:
     args = ["--user-agent", USER_AGENT, "--socket-timeout", "30", "--retries", "2", "--extractor-retries", "2"]
     if host.endswith(("youtube.com", "youtube-nocookie.com", "youtu.be")):
         args += [
-            "--extractor-args", "youtube:player_client=mweb,tv,web_safari,web_embedded,android_vr",
-            "--extractor-args", "youtubepot-bgutilscript:script_path=/opt/bgutil-ytdlp-pot-provider/server/build/generate_once.js",
+            "--extractor-args", "youtube:player_client=mweb",
+            "--extractor-args", "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
         ]
     if host.endswith(("twitter.com", "x.com")):
         args += ["--extractor-args", "twitter:api=syndication"]
